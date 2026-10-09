@@ -56,7 +56,6 @@ if "startup_entries" not in st.session_state:
 if "alibaba_results" not in st.session_state:
     st.session_state.alibaba_results = {"linked": [], "not_linked": [], "errors": []}
 if "pool_mode" not in st.session_state:
-    str_lit_pool_mode = "all"  # safe variable mapping
     st.session_state.pool_mode = "all"
 if "pool_locked" not in st.session_state:
     st.session_state.pool_locked = True
@@ -76,7 +75,6 @@ log_startup("Alibaba Checker Hub initialized with advanced proxy health manager.
 # Constants
 LOGIN_URL = "https://login.alibaba.com/mini_login.htm?scene=h5&appName=icbu&appEntrance=icbu_h5&isMobile=true&lang=en_US"
 
-# Helper to log messages to screen state with detailed timestamps
 def add_checker_log(msg: str):
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
     entry = f"[{timestamp}] {msg}"
@@ -587,6 +585,7 @@ with tab2:
                             "--disable-setuid-sandbox",
                             "--disable-dev-shm-usage",
                             "--disable-gpu",
+                            "--disable-software-rasterizer",
                             "--disable-blink-features=AutomationControlled"
                         ]
                     )
