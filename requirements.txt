@@ -1,5 +1,7 @@
-streamlit
+streamlit>=1.35.0
 requests
 playwright
 nest_asyncio
 pandas
+anyio<4.4.0
+pyarrow<25.0.0
