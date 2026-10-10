@@ -21,17 +21,18 @@ import nest_asyncio
 # Apply nest_asyncio to allow nested event loops in Streamlit
 nest_asyncio.apply()
 
-# Ensure Playwright Chromium binaries are auto-installed in cloud environments
+# Ensure Playwright binaries are auto-installed in cloud environments
 def ensure_playwright_browsers():
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "playwright", "install", "chromium"],
-            check=True,
-            capture_output=True,
-            text=True
-        )
-    except Exception as e:
-        print(f"Error auto-installing Playwright browsers: {e}")
+    for browser_type in ["chromium", "firefox"]:
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "playwright", "install", browser_type],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+        except Exception as e:
+            print(f"Error auto-installing Playwright {browser_type}: {e}")
 
 ensure_playwright_browsers()
 
@@ -577,18 +578,29 @@ with tab2:
                     await context.close()
 
                 async with async_playwright() as p:
-                    add_checker_log("Launching robust headless Playwright Chromium instance with anti-detection flags...")
-                    browser = await p.chromium.launch(
-                        headless=True,
-                        args=[
-                            "--no-sandbox",
-                            "--disable-setuid-sandbox",
-                            "--disable-dev-shm-usage",
-                            "--disable-gpu",
-                            "--disable-software-rasterizer",
-                            "--disable-blink-features=AutomationControlled"
-                        ]
-                    )
+                    browser = None
+                    # Try launching Chromium first; fallback to Firefox if Chromium libraries are missing
+                    try:
+                        add_checker_log("Launching headless Playwright Chromium instance...")
+                        browser = await p.chromium.launch(
+                            headless=True,
+                            args=[
+                                "--no-sandbox",
+                                "--disable-setuid-sandbox",
+                                "--disable-dev-shm-usage",
+                                "--disable-gpu",
+                                "--disable-software-rasterizer",
+                                "--disable-blink-features=AutomationControlled"
+                            ]
+                        )
+                    except Exception as chrom_err:
+                        add_checker_log(f"Chromium launch failed ({chrom_err}). Falling back to Firefox...")
+                        try:
+                            browser = await p.firefox.launch(headless=True)
+                        except Exception as ff_err:
+                            add_checker_log(f"Firefox fallback also failed: {ff_err}")
+                            raise ff_err
+
                     queue = asyncio.Queue()
                     for idx, line in enumerate(accounts, 1):
                         await queue.put((idx, line))
@@ -597,7 +609,7 @@ with tab2:
                     await queue.join()
                     await asyncio.gather(*workers)
                     await browser.close()
-                    add_checker_log("Playwright Chromium browser closed successfully. Checking run finished.")
+                    add_checker_log("Playwright browser closed successfully. Checking run finished.")
 
                 return {"linked": linked_accs, "not_linked": not_linked_accs, "errors": error_accs}
 
