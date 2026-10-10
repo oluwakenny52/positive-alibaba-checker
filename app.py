@@ -421,7 +421,6 @@ with tab2:
                     "Accept": "application/json, text/plain, */*"
                 }
                 try:
-                    # Direct query to Alibaba passport/login endpoint
                     url = f"https://passport.alibaba.com/reg/check_email.do?email={email}"
                     r = requests.get(url, headers=headers, proxies=proxies, timeout=10)
                     text = r.text.lower()
@@ -435,7 +434,6 @@ with tab2:
                         with lock:
                             not_linked_accs.append(line)
                     else:
-                        # Fallback heuristic using login page
                         login_url = f"https://login.alibaba.com/mini_login.htm?scene=h5&loginId={email}"
                         r2 = requests.get(login_url, headers=headers, proxies=proxies, timeout=10)
                         body = r2.text.lower()
