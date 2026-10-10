@@ -400,16 +400,15 @@ with tab2:
                 alive_proxies = oxylabs_proxies_env
 
             linked_accs, not_linked_accs, error_accs = [], [], []
-            proxy_idx = 0
+            proxy_state = [0]
             lock = threading.Lock()
 
             def get_next_proxy():
-                nonlocal proxy_idx
                 if not alive_proxies:
                     return None
                 with lock:
-                    p = alive_proxies[proxy_idx % len(alive_proxies)]
-                    proxy_idx += 1
+                    p = alive_proxies[proxy_state[0] % len(alive_proxies)]
+                    proxy_state[0] += 1
                 formatted = f"http://{p}" if "@" in p else p
                 return {"http": formatted, "https": formatted}
 
@@ -448,6 +447,7 @@ with tab2:
                         error_accs.append(f"{line} # {str(e)[:50]}")
 
             with st.spinner("Checking accounts via high-speed HTTP proxy workers..."):
+                from concurrent.futures import ThreadPoolExecutor
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     executor.map(check_single_account, accounts)
 
