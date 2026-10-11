@@ -424,20 +424,17 @@ with tab2:
 
             def classify(text):
                 text = (text or "").lower()
-                if "verify" in text or "code" in text or "iv_token" in text or "verification" in text:
-                    return "linked", "Verification required / Linked"
-                if "account does not exist" in text or "not exist" in text or "invalid" in text:
+                if "account does not exist" in text or "not exist" in text or "invalid email" in text:
                     return "not_linked", "Account does not exist"
                 if "captcha" in text or "blocked" in text or "forbidden" in text:
                     return "error", "Captcha / blocked"
-                return "not_linked", "Assumed not registered"
+                return "linked", "Account exists / Linked"
 
             def check_single_account(args):
                 idx, line = args
                 email = line.split(":", 1)[0].strip()
                 ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                 
-                # Try up to 2 attempts with proxy rotation / direct fallback
                 for attempt in range(2):
                     proxies = get_next_proxy()
                     headers = {
