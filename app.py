@@ -7,6 +7,8 @@ import time
 import requests
 import json
 import threading
+import sys
+import subprocess
 from datetime import datetime
 from collections import defaultdict
 import pandas as pd
@@ -14,6 +16,16 @@ from playwright.async_api import async_playwright
 import nest_asyncio
 
 nest_asyncio.apply()
+
+# Automatically install Playwright browser and all required system dependencies on startup
+@st.cache_resource
+def install_playwright_with_deps():
+    try:
+        subprocess.run([sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"], check=True)
+    except Exception as e:
+        print(f"Playwright dependency install notice: {e}")
+
+install_playwright_with_deps()
 
 st.set_page_config(
     page_title="Positive Alibaba Checker Hub",
