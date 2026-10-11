@@ -17,15 +17,15 @@ import nest_asyncio
 
 nest_asyncio.apply()
 
-# Automatically install Playwright browser and all required system dependencies on startup
+# Automatically install Playwright browser binary without requiring sudo/root privileges
 @st.cache_resource
-def install_playwright_with_deps():
+def install_playwright_browser():
     try:
-        subprocess.run([sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"], check=True)
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
     except Exception as e:
-        print(f"Playwright dependency install notice: {e}")
+        print(f"Playwright browser install error: {e}")
 
-install_playwright_with_deps()
+install_playwright_browser()
 
 st.set_page_config(
     page_title="Positive Alibaba Checker Hub",
